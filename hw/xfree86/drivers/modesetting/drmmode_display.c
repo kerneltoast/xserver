@@ -1998,15 +1998,51 @@ drmmode_create_pixmap_header(ScreenPtr pScreen, int width, int height,
 static Bool
 drmmode_set_pixmap_bo(drmmode_ptr drmmode, PixmapPtr pixmap, drmmode_bo *bo);
 
+static Bool
+drmmode_scanout_pixmap_create(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout)
+{
+    ScrnInfoPtr scrn = crtc->scrn;
+    drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+    drmmode_ptr drmmode = drmmode_crtc->drmmode;
+    uint32_t pitch;
+    PixmapPtr pixmap;
+    void *pPixData = NULL;
+
+    if (!drmmode_bo_has_bo(&scanout->bo)) {
+        xf86DrvMsg(scrn->scrnIndex, X_ERROR,
+                   "Couldn't allocate scanout pixmap because no scanout BO is present\n");
+        return FALSE;
+    }
+
+    pPixData = drmmode_bo_map(drmmode, &scanout->bo);
+    pitch = drmmode_bo_get_pitch(&scanout->bo),
+
+    pixmap = drmmode_create_pixmap_header(scrn->pScreen,
+                                          scanout->bo.width,
+                                          scanout->bo.height,
+                                          scrn->depth,
+                                          drmmode->kbpp,
+                                          pitch,
+                                          pPixData);
+
+    if (pixmap == NULL) {
+        xf86DrvMsg(scrn->scrnIndex, X_ERROR,
+                   "Couldn't allocate shadow pixmap for rotated CRTC\n");
+        return FALSE;
+    }
+
+    if (!drmmode_set_pixmap_bo(drmmode, pixmap, &scanout->bo))
+        return FALSE;
+
+    scanout->pixmap = pixmap;
+    return TRUE;
+}
+
 static PixmapPtr
 drmmode_shadow_create(xf86CrtcPtr crtc, void *data, int width, int height)
 {
     ScrnInfoPtr scrn = crtc->scrn;
     drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
-    drmmode_ptr drmmode = drmmode_crtc->drmmode;
-    uint32_t rotate_pitch;
-    PixmapPtr rotate_pixmap;
-    void *pPixData = NULL;
 
     if (!data) {
         data = drmmode_shadow_allocate(crtc, width, height);
@@ -2017,31 +2053,10 @@ drmmode_shadow_create(xf86CrtcPtr crtc, void *data, int width, int height)
         }
     }
 
-    if (!drmmode_bo_has_bo(&drmmode_crtc->shadow_rotated.bo)) {
-        xf86DrvMsg(scrn->scrnIndex, X_ERROR,
-                   "Couldn't allocate shadow pixmap for rotated CRTC\n");
+    if (drmmode_scanout_pixmap_create(crtc, &drmmode_crtc->shadow_rotated))
+        return drmmode_crtc->shadow_rotated.pixmap;
+    else
         return NULL;
-    }
-
-    pPixData = drmmode_bo_map(drmmode, &drmmode_crtc->shadow_rotated.bo);
-    rotate_pitch = drmmode_bo_get_pitch(&drmmode_crtc->shadow_rotated.bo),
-
-    rotate_pixmap = drmmode_create_pixmap_header(scrn->pScreen,
-                                                 width, height,
-                                                 scrn->depth,
-                                                 drmmode->kbpp,
-                                                 rotate_pitch,
-                                                 pPixData);
-
-    if (rotate_pixmap == NULL) {
-        xf86DrvMsg(scrn->scrnIndex, X_ERROR,
-                   "Couldn't allocate shadow pixmap for rotated CRTC\n");
-        return NULL;
-    }
-
-    drmmode_set_pixmap_bo(drmmode, rotate_pixmap, &drmmode_crtc->shadow_rotated.bo);
-
-    return rotate_pixmap;
 }
 
 static void
