@@ -256,7 +256,7 @@ ms_present_check_unflip(RRCrtcPtr crtc,
         drmmode_crtc_private_ptr drmmode_crtc = config->crtc[i]->driver_private;
 
         /* Don't do pageflipping if CRTCs are rotated. */
-        if (drmmode_crtc->rotate_bo.gbm)
+        if (drmmode_crtc->shadow_rotated.bo.gbm)
             return FALSE;
 
         if (xf86_crtc_on(config->crtc[i]))

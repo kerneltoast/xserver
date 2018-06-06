@@ -548,7 +548,7 @@ can_exchange(ScrnInfoPtr scrn, DrawablePtr draw,
 
         /* Don't do pageflipping if CRTCs are rotated. */
 #ifdef GLAMOR_HAS_GBM
-        if (drmmode_crtc->rotate_bo.gbm)
+        if (drmmode_crtc->shadow_rotated.bo.gbm)
             return FALSE;
 #endif
 
