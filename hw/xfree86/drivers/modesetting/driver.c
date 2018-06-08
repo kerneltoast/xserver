@@ -515,6 +515,34 @@ GetRec(ScrnInfoPtr pScrn)
     return TRUE;
 }
 
+static void
+ms_update_scanout_damages(ScrnInfoPtr scrn, DamagePtr damage)
+{
+    xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(scrn);
+    RegionPtr dmg_region = DamageRegion(damage);
+    int c;
+
+    for (c = 0; c < xf86_config->num_crtc; c++) {
+        xf86CrtcPtr crtc = xf86_config->crtc[c];
+        drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+        RegionRec pixregion;
+
+        /* do not do any copies for inactive or rotated displays */
+        if (!crtc->active || !drmmode_crtc->shadow_nonrotated)
+            continue;
+
+        /* compute the intersection between the damaged region and the current
+         * crtc, then make the union of the current damages found for the
+         * current BO.
+         */
+        RegionInit(&pixregion, &crtc->bounds, 1);
+        RegionIntersect(&pixregion, &pixregion, dmg_region);
+        RegionUnion(&drmmode_crtc->shadow_nonrotated->screen_damage,
+                    &drmmode_crtc->shadow_nonrotated->screen_damage,
+                    &pixregion);
+    }
+}
+
 static int
 dispatch_dirty_region(ScrnInfoPtr scrn,
                       PixmapPtr pixmap, DamagePtr damage, int fb_id)
@@ -523,6 +551,9 @@ dispatch_dirty_region(ScrnInfoPtr scrn,
     RegionPtr dirty = DamageRegion(damage);
     unsigned num_cliprects = REGION_NUM_RECTS(dirty);
     int ret = 0;
+
+    /* per-crtc scanout damage tracking */
+    ms_update_scanout_damages(scrn, damage);
 
     if (num_cliprects) {
         drmModeClip *clip = xallocarray(num_cliprects, sizeof(drmModeClip));

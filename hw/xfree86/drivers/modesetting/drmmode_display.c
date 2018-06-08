@@ -1378,6 +1378,54 @@ drmmode_DisableSharedPixmapFlipping(xf86CrtcPtr crtc, drmmode_ptr drmmode)
                                       &drmmode_crtc->prime_pixmap_back);
 }
 
+void
+drmmode_update_scanout_buffer(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout)
+{
+    ScreenPtr pScreen = xf86ScrnToScreen(crtc->scrn);
+    PixmapPtr screenpix = pScreen->GetScreenPixmap(pScreen);
+    PixmapPtr dst = scanout->pixmap;
+    BoxPtr b;
+    GCPtr pGC;
+    int n;
+
+    /* early exit if we have nothing to do */
+    if (RegionNil(&scanout->screen_damage))
+        return;
+
+    n = RegionNumRects(&scanout->screen_damage);
+    b = RegionRects(&scanout->screen_damage);
+
+    pGC = GetScratchGC(crtc->scrn->depth, pScreen);
+    if (pScreen->root) {
+        ChangeGCVal subWindowMode;
+
+        subWindowMode.val = IncludeInferiors;
+        ChangeGC(NullClient, pGC, GCSubwindowMode, &subWindowMode);
+    }
+    ValidateGC(&dst->drawable, pGC);
+
+    while (n--) {
+        BoxRec src_box;
+        int s_x, s_y, w, h, d_x, d_y;
+
+        src_box = *b;
+        s_x = src_box.x1;
+        s_y = src_box.y1;
+        w = src_box.x2 - src_box.x1;
+        h = src_box.y2 - src_box.y1;
+        d_x = src_box.x1 - crtc->x;
+        d_y = src_box.y1 - crtc->y;
+
+        pGC->ops->CopyArea(&screenpix->drawable, &dst->drawable, pGC,
+                           s_x, s_y, w, h, d_x, d_y);
+        b++;
+    }
+    FreeScratchGC(pGC);
+
+    /* We have blitted all the damages, reset them */
+    RegionEmpty(&scanout->screen_damage);
+}
+
 static void
 drmmode_ConvertFromKMode(ScrnInfoPtr scrn,
                          drmModeModeInfo * kmode, DisplayModePtr mode)
@@ -1953,6 +2001,11 @@ drmmode_scanout_allocate(xf86CrtcPtr crtc, int width, int height,
         drmmode_bo_destroy(drmmode, &scanout->bo);
         return FALSE;
     }
+
+    /* set the initial damage to the size of the CRTC since it has not been
+     * initialized yet.
+     */
+    RegionInit(&scanout->screen_damage, &crtc->bounds, 1);
 
     return TRUE;
 }
