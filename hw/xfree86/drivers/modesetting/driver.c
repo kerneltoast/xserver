@@ -145,6 +145,7 @@ static const OptionInfoRec Options[] = {
     {OPTION_VARIABLE_REFRESH, "VariableRefresh", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_USE_GAMMA_LUT, "UseGammaLUT", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_ASYNC_FLIP_SECONDARIES, "AsyncFlipSecondaries", OPTV_BOOLEAN, {0}, FALSE},
+    {OPTION_SHADOW_PRIMARY, "ShadowPrimary", OPTV_BOOLEAN, {0}, FALSE},
     {-1, NULL, OPTV_NONE, {0}, FALSE}
 };
 
@@ -1213,6 +1214,13 @@ PreInit(ScrnInfoPtr pScrn, int flags)
 
     if (xf86ReturnOptValBool(ms->drmmode.Options, OPTION_SW_CURSOR, FALSE)) {
         ms->drmmode.sw_cursor = TRUE;
+    }
+
+    ms->drmmode.shadow_primary =
+            xf86ReturnOptValBool(ms->drmmode.Options, OPTION_SHADOW_PRIMARY,
+                                 FALSE);
+    if (ms->drmmode.shadow_primary) {
+        xf86DrvMsg(pScrn->scrnIndex, X_INFO, "ShadowPrimary enabled\n");
     }
 
     ms->cursor_width = 64;

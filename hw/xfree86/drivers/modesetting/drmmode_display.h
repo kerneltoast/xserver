@@ -109,6 +109,9 @@ typedef struct {
     Bool glamor;
     Bool shadow_enable;
     Bool shadow_enable2;
+    /** force creating a per-crtc framebuffer **/
+    Bool shadow_primary;
+
     /** Is Option "PageFlip" enabled? */
     Bool pageflip;
     Bool force_24_32;
