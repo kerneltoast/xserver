@@ -190,6 +190,7 @@ typedef struct {
     drmmode_format_rec *formats;
 
     drmmode_shadow_scanout_rec shadow_rotated;
+    drmmode_shadow_scanout_ptr shadow_nonrotated;
 
     PixmapPtr prime_pixmap;
     PixmapPtr prime_pixmap_back;

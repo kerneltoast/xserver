@@ -61,6 +61,13 @@ static Bool drmmode_xf86crtc_resize(ScrnInfoPtr scrn, int width, int height);
 static PixmapPtr drmmode_create_pixmap_header(ScreenPtr pScreen, int width, int height,
                                               int depth, int bitsPerPixel, int devKind,
                                               void *pPixData);
+static Bool
+drmmode_scanout_allocate(xf86CrtcPtr crtc, int width, int height,
+                         drmmode_shadow_scanout_ptr scanout);
+static Bool
+drmmode_scanout_pixmap_create(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout);
+static void
+drmmode_scanout_destroy(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout);
 
 static const struct drm_color_ctm ctm_identity = { {
     1UL << 32, 0, 0,
@@ -648,6 +655,9 @@ drmmode_crtc_get_fb_id(xf86CrtcPtr crtc, uint32_t *fb_id, int *x, int *y)
     }
     else if (drmmode_crtc->shadow_rotated.fb_id) {
         *fb_id = drmmode_crtc->shadow_rotated.fb_id;
+        *x = *y = 0;
+    } else if (drmmode_crtc->shadow_nonrotated) {
+        *fb_id = drmmode_crtc->shadow_nonrotated->fb_id;
         *x = *y = 0;
     }
     else {
@@ -1596,6 +1606,54 @@ drmmode_copy_fb(ScrnInfoPtr pScrn, drmmode_ptr drmmode)
 #endif
 }
 
+static drmmode_shadow_scanout_ptr
+drmmode_shadow_scanout_create(xf86CrtcPtr crtc)
+{
+    ScreenPtr screen = xf86ScrnToScreen(crtc->scrn);
+    ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
+    drmmode_shadow_scanout_ptr scanout;
+
+    scanout = calloc(sizeof(drmmode_shadow_scanout_rec), 1);
+    if (!scanout) {
+        xf86DrvMsg(scrn->scrnIndex, X_INFO,
+                   "failed to allocate a drmmode_shadow_scanout_rec struct\n");
+        return NULL;
+    }
+
+    if (!drmmode_scanout_allocate(crtc, crtc->mode.HDisplay,
+                                 crtc->mode.VDisplay,
+                                 scanout)) {
+        xf86DrvMsg(scrn->scrnIndex, X_INFO,
+                   "failed to allocate a %ix%i buffer\n",
+                   crtc->mode.HDisplay, crtc->mode.VDisplay);
+        free(scanout);
+        return NULL;
+    }
+
+    if (!drmmode_scanout_pixmap_create(crtc, scanout)) {
+        xf86DrvMsg(scrn->scrnIndex, X_INFO,
+                   "failed to create the scanout pixmap\n");
+        drmmode_scanout_destroy(crtc, scanout);
+        free(scanout);
+        return NULL;
+    }
+
+    /* force a repaint, to guarantee the initial state to be acceptable */
+    drmmode_update_scanout_buffer(crtc, scanout);
+
+    return scanout;
+}
+
+static Bool
+drmmode_need_shadow_scanout(xf86CrtcPtr crtc) {
+    /* we do not support rotated shadow because X already does */
+    if (crtc->rotation != RR_Rotate_0)
+        return FALSE;
+
+    /* We found no reason to shadow the FB, nothing else to do! */
+    return FALSE;
+}
+
 static Bool
 drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
                        Rotation rotation, int x, int y)
@@ -1604,6 +1662,7 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
     xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(crtc->scrn);
     drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
     drmmode_ptr drmmode = drmmode_crtc->drmmode;
+    drmmode_shadow_scanout_ptr saved_shadow_nonrotated;
     int saved_x, saved_y;
     Rotation saved_rotation;
     DisplayModeRec saved_mode;
@@ -1615,6 +1674,7 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
     saved_x = crtc->x;
     saved_y = crtc->y;
     saved_rotation = crtc->rotation;
+    saved_shadow_nonrotated = drmmode_crtc->shadow_nonrotated;
 
     if (mode) {
         crtc->mode = *mode;
@@ -1629,6 +1689,18 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
         crtc->funcs->gamma_set(crtc, crtc->gamma_red, crtc->gamma_green,
                                crtc->gamma_blue, crtc->gamma_size);
 
+        if (drmmode_need_shadow_scanout(crtc)) {
+            drmmode_crtc->shadow_nonrotated = drmmode_shadow_scanout_create(crtc);
+            if (!drmmode_crtc->shadow_nonrotated) {
+                xf86DrvMsg(crtc->scrn->scrnIndex, X_ERROR,
+                           "drmmode_scanout_shadow_init failed!\n");
+                ret = FALSE;
+                goto done;
+            }
+        } else {
+            drmmode_crtc->shadow_nonrotated = NULL;
+        }
+
         can_test = drmmode_crtc_can_test_mode(crtc);
         if (drmmode_crtc_set_mode(crtc, can_test)) {
             xf86DrvMsg(crtc->scrn->scrnIndex, X_ERROR,
@@ -1637,6 +1709,9 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
             goto done;
         } else
             ret = TRUE;
+
+        /* We cannot fail anymore, free the previous scanout buffer */
+        drmmode_scanout_destroy(crtc, saved_shadow_nonrotated);
 
         if (crtc->scrn->pScreen)
             xf86CrtcSetScreenSubpixelOrder(crtc->scrn->pScreen);
@@ -1674,6 +1749,12 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
         crtc->y = saved_y;
         crtc->rotation = saved_rotation;
         crtc->mode = saved_mode;
+
+        /* make sure we de-allocate anything we may have allocated before
+         * restoring the previous values
+         */
+        drmmode_scanout_destroy(crtc, drmmode_crtc->shadow_nonrotated);
+        drmmode_crtc->shadow_nonrotated = saved_shadow_nonrotated;
     } else
         crtc->active = TRUE;
 
@@ -2110,6 +2191,33 @@ drmmode_shadow_create(xf86CrtcPtr crtc, void *data, int width, int height)
         return drmmode_crtc->shadow_rotated.pixmap;
     else
         return NULL;
+}
+
+static void
+drmmode_scanout_destroy(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout)
+{
+    drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+    drmmode_ptr drmmode = drmmode_crtc->drmmode;
+
+    if (!scanout)
+        return;
+
+    if (scanout->pixmap) {
+        scanout->pixmap->drawable.pScreen->DestroyPixmap(scanout->pixmap);
+        scanout->pixmap = NULL;
+    }
+
+    if (scanout->fb_id) {
+        drmModeRmFB(drmmode->fd, scanout->fb_id);
+        scanout->fb_id = 0;
+    }
+
+    drmmode_bo_destroy(drmmode, &scanout->bo);
+    memset(&scanout->bo, 0, sizeof scanout->bo);
+
+    RegionEmpty(&scanout->screen_damage);
+
+    free(scanout);
 }
 
 static void
@@ -4326,6 +4434,14 @@ drmmode_free_bos(ScrnInfoPtr pScrn, drmmode_ptr drmmode)
         drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
 
         dumb_bo_destroy(drmmode->fd, drmmode_crtc->cursor_bo);
+
+        drmmode_scanout_destroy(crtc, drmmode_crtc->shadow_nonrotated);
+
+        /* HACK: make sure the shadow buffers are NULL because, when reseting, X
+         * does not re-allocate the crtc structures, which keeps stale pointers
+         * and leads to some use-after-free.
+         */
+        drmmode_crtc->shadow_nonrotated = NULL;
     }
 }
 
