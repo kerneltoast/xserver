@@ -1646,9 +1646,40 @@ drmmode_shadow_scanout_create(xf86CrtcPtr crtc)
 
 static Bool
 drmmode_need_shadow_scanout(xf86CrtcPtr crtc) {
+    drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+    drmmode_ptr drmmode = drmmode_crtc->drmmode;
+    ScreenPtr pScreen = xf86ScrnToScreen(crtc->scrn);
+    PixmapPtr screenpix = pScreen->GetScreenPixmap(pScreen);
+    drmModeResPtr mode_res;
+
     /* we do not support rotated shadow because X already does */
     if (crtc->rotation != RR_Rotate_0)
         return FALSE;
+
+    /* check if the current screen size exceeds the driver's limits */
+    mode_res = drmModeGetResources(drmmode->fd);
+    if (!mode_res)
+        return FALSE;
+
+    if (screenpix->drawable.width >= mode_res->max_width) {
+        xf86DrvMsg(crtc->scrn->scrnIndex, X_ERROR,
+                   "Shadow the CRTC's scanout buffer because the screen width "
+                   "exceeds the driver's limit (%d vs %d). Expect a lower"
+                   "performance. Use the XRender backend of your compositor "
+                   "to reduce the performance impact.\n",
+                   screenpix->drawable.width, mode_res->max_width);
+        return TRUE;
+    }
+
+    if (screenpix->drawable.height >= mode_res->max_height) {
+        xf86DrvMsg(crtc->scrn->scrnIndex, X_ERROR,
+                   "Shadow the CRTC's scanout buffer because the screen height "
+                   "exceeds the driver's limit (%d vs %d). Expect a lower lower"
+                   "performance. Use the XRender backend of your compositor "
+                   "to reduce the performance impact.\n",
+                   screenpix->drawable.height, mode_res->max_height);
+        return TRUE;
+    }
 
     /* We found no reason to shadow the FB, nothing else to do! */
     return FALSE;
@@ -3883,8 +3914,7 @@ drmmode_pre_init(ScrnInfoPtr pScrn, drmmode_ptr drmmode, int cpp)
     xf86DrvMsgVerb(pScrn->scrnIndex, X_INFO, MS_LOGLEVEL_DEBUG,
                    "Up to %d crtcs needed for screen.\n", crtcs_needed);
 
-    xf86CrtcSetSizeRange(pScrn, 320, 200, mode_res->max_width,
-                         mode_res->max_height);
+    xf86CrtcSetSizeRange(pScrn, 320, 200, INT16_MAX, INT16_MAX);
     for (i = 0; i < mode_res->count_crtcs; i++)
         if (!xf86IsEntityShared(pScrn->entityList[0]) ||
             (crtcs_needed && !(ms_ent->assigned_crtcs & (1 << i))))
