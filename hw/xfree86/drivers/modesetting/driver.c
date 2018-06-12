@@ -724,7 +724,7 @@ ms_dirty_get_ent(ScreenPtr screen, PixmapPtr secondary_dst)
 }
 
 static void
-ms_refresh_all_scanout_buffers(ScreenPtr pScreen)
+ms_schedule_all_scanout_buffers_updates(ScreenPtr pScreen)
 {
     ScrnInfoPtr scrn = xf86ScreenToScrn(pScreen);
     xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(scrn);
@@ -738,13 +738,13 @@ ms_refresh_all_scanout_buffers(ScreenPtr pScreen)
         if (!crtc->active || !drmmode_crtc->shadow_nonrotated)
             continue;
 
-        drmmode_update_scanout_buffer(crtc, drmmode_crtc->shadow_nonrotated);
+        /* schedule an async update, or revert to a synchronous copy on failure */
+        if (!drmmode_scanout_buffer_update_schedule(crtc,
+                                                    drmmode_crtc->shadow_nonrotated)) {
+            drmmode_update_scanout_buffer(crtc,
+                                          drmmode_crtc->shadow_nonrotated);
+        }
     }
-
-    /* force the buffer to be rendered to as quickly as possible */
-    #ifdef GLAMOR_HAS_GBM
-    glamor_finish(pScreen);
-    #endif
 }
 
 static void
@@ -763,8 +763,7 @@ msBlockHandler(ScreenPtr pScreen, void *timeout)
 
     ms_dirty_update(pScreen, timeout);
 
-    /* TODO: limit the blits to the CRTC's refresh rate to save memory BW */
-    ms_refresh_all_scanout_buffers(pScreen);
+    ms_schedule_all_scanout_buffers_updates(pScreen);
 }
 
 static void

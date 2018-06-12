@@ -1391,6 +1391,7 @@ drmmode_DisableSharedPixmapFlipping(xf86CrtcPtr crtc, drmmode_ptr drmmode)
 void
 drmmode_update_scanout_buffer(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout)
 {
+    modesettingPtr ms = modesettingPTR(crtc->scrn);
     ScreenPtr pScreen = xf86ScrnToScreen(crtc->scrn);
     PixmapPtr screenpix = pScreen->GetScreenPixmap(pScreen);
     PixmapPtr dst = scanout->pixmap;
@@ -1434,7 +1435,66 @@ drmmode_update_scanout_buffer(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scano
 
     /* We have blitted all the damages, reset them */
     RegionEmpty(&scanout->screen_damage);
+
+    /* force the buffer to be rendered to as quickly as possible */
+    #ifdef GLAMOR_HAS_GBM
+    glamor_finish(pScreen);
+    #endif
 }
+
+struct scanout_buffer_update_args {
+    xf86CrtcPtr crtc;
+    drmmode_shadow_scanout_ptr scanout;
+};
+
+static void
+drmmode_scanout_buffer_update_handler(uint64_t frame, uint64_t usec,
+                                      void *data)
+{
+    struct scanout_buffer_update_args *args = data;
+
+    if (args->scanout) {
+        drmmode_update_scanout_buffer(args->crtc, args->scanout);
+    }
+    args->scanout->update_seq = 0;
+    free(args);
+}
+
+static void
+drmmode_scanout_buffer_update_abort(void *data)
+{
+    struct scanout_buffer_update_args *args = data;
+    args->scanout->update_seq = 0;
+    free(args);
+}
+
+Bool
+drmmode_scanout_buffer_update_schedule(xf86CrtcPtr crtc,
+                                       drmmode_shadow_scanout_ptr scanout)
+{
+    struct scanout_buffer_update_args *event_args;
+    int flip_seq = 0, ret;
+
+    if (scanout->update_seq)
+        return TRUE;
+
+    event_args = calloc(1, sizeof(*event_args));
+    if (!event_args)
+        return FALSE;
+
+    event_args->crtc = crtc;
+    event_args->scanout = scanout;
+
+    flip_seq = ms_drm_queue_alloc(crtc, event_args,
+                                  drmmode_scanout_buffer_update_handler,
+                                  drmmode_scanout_buffer_update_abort);
+
+    ret = ms_queue_vblank(crtc, MS_QUEUE_RELATIVE, 1, NULL, flip_seq);
+    scanout->update_seq = ret ? flip_seq : 0;
+
+    return ret;
+}
+
 
 static void
 drmmode_ConvertFromKMode(ScrnInfoPtr scrn,
@@ -2232,6 +2292,11 @@ drmmode_scanout_destroy(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout)
 
     if (!scanout)
         return;
+
+    if (scanout->update_seq) {
+        ms_drm_abort_seq(crtc->scrn, scanout->update_seq);
+        scanout->update_seq = 0;
+    }
 
     if (scanout->pixmap) {
         scanout->pixmap->drawable.pScreen->DestroyPixmap(scanout->pixmap);
