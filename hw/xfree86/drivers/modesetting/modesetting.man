@@ -122,6 +122,14 @@ In an effort to reduce the performance cost, the latency may be negatively
 affected. The default is
 .B off.
 .TP
+.BI "Option \*qTearFree\*q \*q" boolean \*q
+Enable tearing prevention using the hardware page flipping mechanism. This
+option currently doesn't have any effect for rotated CRTCs. It requires
+allocating two separate scanout buffers for each non-rotated CRTC.
+.br
+This feature may reduce performance, increase latency and introduce stuttering. The default is
+.B off.
+.TP
 .SH "SEE ALSO"
 @xservername@(@appmansuffix@), @xconfigfile@(@filemansuffix@), Xserver(@appmansuffix@),
 X(@miscmansuffix@)

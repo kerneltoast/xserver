@@ -475,4 +475,65 @@ error_out:
 #endif /* GLAMOR_HAS_GBM */
 }
 
+static void
+ms_scanout_flip_abort(void *data)
+{
+    drmmode_crtc_private_ptr drmmode_crtc = data;
+
+    if (drmmode_crtc->shadow_nonrotated_back)
+        drmmode_crtc->shadow_nonrotated_back->update_seq = 0;
+}
+
+static void
+ms_scanout_flip_handler(uint64_t frame, uint64_t usec, void *data)
+{
+    drmmode_crtc_private_ptr drmmode_crtc = data;
+    drmmode_shadow_scanout_ptr tmp;
+
+    if (!drmmode_crtc->shadow_nonrotated || !drmmode_crtc->shadow_nonrotated_back)
+        return;
+
+    /* the flip has happened, exchange the front and back buffers */
+    tmp = drmmode_crtc->shadow_nonrotated;
+    drmmode_crtc->shadow_nonrotated = drmmode_crtc->shadow_nonrotated_back;
+    drmmode_crtc->shadow_nonrotated_back = tmp;
+
+    /* allow the next update to queue a new flip */
+    ms_scanout_flip_abort(data);
+}
+
+void
+ms_do_tearfree_flip(xf86CrtcPtr crtc)
+{
+    drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+    ScreenPtr screen = xf86ScrnToScreen(crtc->scrn);
+    uint32_t seq;
+
+    /* exit if the current crtc is off or not using tear-free */
+    if (!xf86_crtc_on(crtc) || !drmmode_crtc->shadow_nonrotated_back)
+        return;
+
+    /* exit if an update has already been scheduled */
+    if (drmmode_crtc->shadow_nonrotated_back->update_seq)
+        return;
+
+    /* copy the screen pixmap to our current backbuffer */
+    drmmode_update_scanout_buffer(crtc,
+                                  drmmode_crtc->shadow_nonrotated_back);
+
+    seq = ms_drm_queue_alloc(crtc, drmmode_crtc, ms_scanout_flip_handler,
+                             ms_scanout_flip_abort);
+    if (!seq) {
+        xf86DrvMsg(crtc->scrn->scrnIndex, X_WARNING,
+                   "ms_drm_queue_alloc failed (%s). This may result in stale "
+                   "content displayed on the screen\n", strerror(errno));
+        return;
+    }
+
+    /* schedule a flip, and update the update_seq on success */
+    if (do_queue_flip_on_crtc(screen, crtc,
+                              drmmode_crtc->shadow_nonrotated_back->fb_id,
+                              DRM_MODE_PAGE_FLIP_EVENT, seq))
+        drmmode_crtc->shadow_nonrotated_back->update_seq = seq;
+}
 #endif

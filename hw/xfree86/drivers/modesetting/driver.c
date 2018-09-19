@@ -146,6 +146,7 @@ static const OptionInfoRec Options[] = {
     {OPTION_USE_GAMMA_LUT, "UseGammaLUT", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_ASYNC_FLIP_SECONDARIES, "AsyncFlipSecondaries", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_SHADOW_PRIMARY, "ShadowPrimary", OPTV_BOOLEAN, {0}, FALSE},
+    {OPTION_TEARFREE, "TearFree", OPTV_BOOLEAN, {0}, FALSE},
     {-1, NULL, OPTV_NONE, {0}, FALSE}
 };
 
@@ -541,6 +542,13 @@ ms_update_scanout_damages(ScrnInfoPtr scrn, DamagePtr damage)
         RegionUnion(&drmmode_crtc->shadow_nonrotated->screen_damage,
                     &drmmode_crtc->shadow_nonrotated->screen_damage,
                     &pixregion);
+
+        /* also update the shadow backbuffer's damages if available */
+        if (drmmode_crtc->shadow_nonrotated_back) {
+            RegionUnion(&drmmode_crtc->shadow_nonrotated_back->screen_damage,
+                        &drmmode_crtc->shadow_nonrotated_back->screen_damage,
+                        &pixregion);
+        }
     }
 }
 
@@ -734,16 +742,22 @@ ms_schedule_all_scanout_buffers_updates(ScreenPtr pScreen)
     for (c = 0; c < xf86_config->num_crtc; c++) {
         xf86CrtcPtr crtc = xf86_config->crtc[c];
         drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+        drmmode_ptr drmmode = drmmode_crtc->drmmode;
 
         /* do not do any copies for inactive or rotated displays */
         if (!crtc->active || !drmmode_crtc->shadow_nonrotated)
             continue;
 
-        /* schedule an async update, or revert to a synchronous copy on failure */
-        if (!drmmode_scanout_buffer_update_schedule(crtc,
-                                                    drmmode_crtc->shadow_nonrotated)) {
-            drmmode_update_scanout_buffer(crtc,
-                                          drmmode_crtc->shadow_nonrotated);
+        /* do an async update, unless we are using tearfree or if it failed */
+        if (drmmode->tear_free) {
+            ms_do_tearfree_flip(crtc);
+        } else if (!drmmode_scanout_buffer_update_schedule(crtc,
+                                                           drmmode_crtc->shadow_nonrotated)) {
+                /* since we failed the asynchronous update, fallback to the
+                 * synchronous one
+                 */
+                drmmode_update_scanout_buffer(crtc,
+                                              drmmode_crtc->shadow_nonrotated);
         }
     }
 }
@@ -1221,6 +1235,13 @@ PreInit(ScrnInfoPtr pScrn, int flags)
                                  FALSE);
     if (ms->drmmode.shadow_primary) {
         xf86DrvMsg(pScrn->scrnIndex, X_INFO, "ShadowPrimary enabled\n");
+    }
+
+    ms->drmmode.tear_free =
+            xf86ReturnOptValBool(ms->drmmode.Options, OPTION_TEARFREE,
+                                 FALSE);
+    if (ms->drmmode.tear_free) {
+        xf86DrvMsg(pScrn->scrnIndex, X_INFO, "TearFree enabled\n");
     }
 
     ms->cursor_width = 64;

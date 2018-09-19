@@ -112,6 +112,9 @@ typedef struct {
     /** force creating a per-crtc framebuffer **/
     Bool shadow_primary;
 
+    /** Is Option "TearFree" enabled? */
+    Bool tear_free;
+
     /** Is Option "PageFlip" enabled? */
     Bool pageflip;
     Bool force_24_32;
@@ -195,6 +198,7 @@ typedef struct {
 
     drmmode_shadow_scanout_rec shadow_rotated;
     drmmode_shadow_scanout_ptr shadow_nonrotated;
+    drmmode_shadow_scanout_ptr shadow_nonrotated_back;
 
     PixmapPtr prime_pixmap;
     PixmapPtr prime_pixmap_back;

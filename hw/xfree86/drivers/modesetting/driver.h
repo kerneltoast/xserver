@@ -62,6 +62,7 @@ typedef enum {
     OPTION_USE_GAMMA_LUT,
     OPTION_ASYNC_FLIP_SECONDARIES,
     OPTION_SHADOW_PRIMARY,
+    OPTION_TEARFREE,
 } modesettingOpts;
 
 typedef struct
@@ -241,6 +242,7 @@ Bool ms_do_pageflip(ScreenPtr screen,
 
 #endif
 
+void ms_do_tearfree_flip(xf86CrtcPtr crtc);
 int ms_flush_drm_events(ScreenPtr screen);
 Bool ms_window_has_variable_refresh(modesettingPtr ms, WindowPtr win);
 void ms_present_set_screen_vrr(ScrnInfoPtr scrn, Bool vrr_enabled);

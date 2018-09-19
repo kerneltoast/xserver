@@ -1722,7 +1722,7 @@ drmmode_need_shadow_scanout(xf86CrtcPtr crtc) {
     if (crtc->rotation != RR_Rotate_0)
         return FALSE;
 
-    if (drmmode->shadow_primary)
+    if (drmmode->shadow_primary || drmmode->tear_free)
         return TRUE;
 
     /* check if the current screen size exceeds the driver's limits */
@@ -1763,6 +1763,7 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
     drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
     drmmode_ptr drmmode = drmmode_crtc->drmmode;
     drmmode_shadow_scanout_ptr saved_shadow_nonrotated;
+    drmmode_shadow_scanout_ptr saved_shadow_nonrotated_back;
     int saved_x, saved_y;
     Rotation saved_rotation;
     DisplayModeRec saved_mode;
@@ -1775,6 +1776,7 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
     saved_y = crtc->y;
     saved_rotation = crtc->rotation;
     saved_shadow_nonrotated = drmmode_crtc->shadow_nonrotated;
+    saved_shadow_nonrotated_back = drmmode_crtc->shadow_nonrotated_back;
 
     if (mode) {
         crtc->mode = *mode;
@@ -1789,16 +1791,27 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
         crtc->funcs->gamma_set(crtc, crtc->gamma_red, crtc->gamma_green,
                                crtc->gamma_blue, crtc->gamma_size);
 
+        drmmode_crtc->shadow_nonrotated = NULL;
+        drmmode_crtc->shadow_nonrotated_back = NULL;
+
         if (drmmode_need_shadow_scanout(crtc)) {
             drmmode_crtc->shadow_nonrotated = drmmode_shadow_scanout_create(crtc);
             if (!drmmode_crtc->shadow_nonrotated) {
                 xf86DrvMsg(crtc->scrn->scrnIndex, X_ERROR,
-                           "drmmode_scanout_shadow_init failed!\n");
+                           "drmmode_scanout_shadow_init failed for the frontbuffer!\n");
                 ret = FALSE;
                 goto done;
             }
-        } else {
-            drmmode_crtc->shadow_nonrotated = NULL;
+        }
+
+        if (drmmode->tear_free) {
+            drmmode_crtc->shadow_nonrotated_back = drmmode_shadow_scanout_create(crtc);
+            if (!drmmode_crtc->shadow_nonrotated_back) {
+                xf86DrvMsg(crtc->scrn->scrnIndex, X_ERROR,
+                           "drmmode_scanout_shadow_init failed for the backbuffer!\n");
+                ret = FALSE;
+                goto done;
+            }
         }
 
         can_test = drmmode_crtc_can_test_mode(crtc);
@@ -1812,6 +1825,7 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
 
         /* We cannot fail anymore, free the previous scanout buffer */
         drmmode_scanout_destroy(crtc, saved_shadow_nonrotated);
+        drmmode_scanout_destroy(crtc, saved_shadow_nonrotated_back);
 
         if (crtc->scrn->pScreen)
             xf86CrtcSetScreenSubpixelOrder(crtc->scrn->pScreen);
@@ -1854,7 +1868,9 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
          * restoring the previous values
          */
         drmmode_scanout_destroy(crtc, drmmode_crtc->shadow_nonrotated);
+        drmmode_scanout_destroy(crtc, drmmode_crtc->shadow_nonrotated_back);
         drmmode_crtc->shadow_nonrotated = saved_shadow_nonrotated;
+        drmmode_crtc->shadow_nonrotated_back = saved_shadow_nonrotated_back;
     } else
         crtc->active = TRUE;
 
@@ -4540,12 +4556,14 @@ drmmode_free_bos(ScrnInfoPtr pScrn, drmmode_ptr drmmode)
         dumb_bo_destroy(drmmode->fd, drmmode_crtc->cursor_bo);
 
         drmmode_scanout_destroy(crtc, drmmode_crtc->shadow_nonrotated);
+        drmmode_scanout_destroy(crtc, drmmode_crtc->shadow_nonrotated_back);
 
         /* HACK: make sure the shadow buffers are NULL because, when reseting, X
          * does not re-allocate the crtc structures, which keeps stale pointers
          * and leads to some use-after-free.
          */
         drmmode_crtc->shadow_nonrotated = NULL;
+        drmmode_crtc->shadow_nonrotated_back = NULL;
     }
 }
 
