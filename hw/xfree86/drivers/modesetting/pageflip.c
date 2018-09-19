@@ -160,11 +160,30 @@ ms_pageflip_abort(void *data)
 }
 
 static Bool
-do_queue_flip_on_crtc(modesettingPtr ms, xf86CrtcPtr crtc,
+do_queue_flip_on_crtc(ScreenPtr screen, xf86CrtcPtr crtc, unsigned int fb_id,
                       uint32_t flags, uint32_t seq)
 {
-    return drmmode_crtc_flip(crtc, ms->drmmode.fb_id, flags,
-                             (void *) (uintptr_t) seq);
+    ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
+    int err;
+
+    while (drmmode_crtc_flip(crtc, fb_id, flags, (void *) (uintptr_t) seq)) {
+        err = errno;
+        /* We may have failed because the event queue was full.  Flush it
+         * and retry.  If there was nothing to flush, then we failed for
+         * some other reason and should just return an error.
+         */
+        if (ms_flush_drm_events(screen) <= 0) {
+            xf86DrvMsg(scrn->scrnIndex, X_WARNING,
+                       "flip queue failed: %s\n", strerror(err));
+            return FALSE;
+        }
+
+        /* We flushed some events, so try again. */
+        xf86DrvMsg(scrn->scrnIndex, X_WARNING, "flip queue retry\n");
+    }
+
+    /* The page flip succeded. */
+    return TRUE;
 }
 
 enum queue_flip_status {
@@ -184,6 +203,7 @@ queue_flip_on_crtc(ScreenPtr screen, xf86CrtcPtr crtc,
     drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
     struct ms_crtc_pageflip *flip;
     uint32_t seq;
+    Bool ret;
 
     flip = calloc(1, sizeof(struct ms_crtc_pageflip));
     if (flip == NULL) {
@@ -205,23 +225,13 @@ queue_flip_on_crtc(ScreenPtr screen, xf86CrtcPtr crtc,
     /* take a reference on flipdata for use in flip */
     flipdata->flip_count++;
 
-    while (do_queue_flip_on_crtc(ms, crtc, flags, seq)) {
-        /* We may have failed because the event queue was full.  Flush it
-         * and retry.  If there was nothing to flush, then we failed for
-         * some other reason and should just return an error.
-         */
-        if (ms_flush_drm_events(screen) <= 0) {
-            /* Aborting will also decrement flip_count and free(flip). */
-            ms_drm_abort_seq(scrn, seq);
-            return QUEUE_FLIP_DRM_FLUSH_FAILED;
-        }
-
-        /* We flushed some events, so try again. */
-        xf86DrvMsg(scrn->scrnIndex, X_WARNING, "flip queue retry\n");
+    ret = do_queue_flip_on_crtc(screen, crtc, ms->drmmode.fb_id, flags, seq);
+    if (!ret) {
+        /* Aborting will also decrement flip_count and free(flip). */
+        ms_drm_abort_seq(scrn, seq);
     }
 
-    /* The page flip succeeded. */
-    return QUEUE_FLIP_SUCCESS;
+    return ret;
 }
 
 
