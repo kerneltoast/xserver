@@ -371,6 +371,14 @@ ms_present_flip(RRCrtcPtr crtc,
         ms_present_set_screen_vrr(scrn, TRUE);
     }
 
+    /* Stall until the tearfree flip is finished */
+    if (drmmode_crtc->shadow_nonrotated_back &&
+        drmmode_crtc->shadow_nonrotated_back->update_seq &&
+        ms_flush_drm_events(screen) <= 0) {
+        free(event);
+        return FALSE;
+    }
+
     ret = ms_do_pageflip(screen, pixmap, event, drmmode_crtc->vblank_pipe, !sync_flip,
                          ms_present_flip_handler, ms_present_flip_abort,
                          "Present-flip");

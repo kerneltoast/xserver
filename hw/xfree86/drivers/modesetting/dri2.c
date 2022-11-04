@@ -494,6 +494,14 @@ ms_dri2_schedule_flip(ms_dri2_frame_event_ptr info)
     event->event_complete = info->event_complete;
     event->event_data = info->event_data;
 
+    /* Stall until the tearfree flip is finished */
+    if (drmmode_crtc->shadow_nonrotated_back &&
+        drmmode_crtc->shadow_nonrotated_back->update_seq &&
+        ms_flush_drm_events(screen) <= 0) {
+        free(event);
+        return FALSE;
+    }
+
     if (ms_do_pageflip(screen, back_priv->pixmap, event,
                        drmmode_crtc->vblank_pipe, FALSE,
                        ms_dri2_flip_handler,

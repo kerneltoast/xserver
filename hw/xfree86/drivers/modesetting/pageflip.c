@@ -229,9 +229,10 @@ queue_flip_on_crtc(ScreenPtr screen, xf86CrtcPtr crtc,
     if (!ret) {
         /* Aborting will also decrement flip_count and free(flip). */
         ms_drm_abort_seq(scrn, seq);
+        return QUEUE_FLIP_DRM_FLUSH_FAILED;
     }
 
-    return ret;
+    return QUEUE_FLIP_SUCCESS;
 }
 
 
@@ -507,6 +508,7 @@ ms_do_tearfree_flip(xf86CrtcPtr crtc)
 {
     drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
     ScreenPtr screen = xf86ScrnToScreen(crtc->scrn);
+    modesettingPtr ms = modesettingPTR(crtc->scrn);
     uint32_t seq;
 
     /* exit if the current crtc is off or not using tear-free */
@@ -516,6 +518,15 @@ ms_do_tearfree_flip(xf86CrtcPtr crtc)
     /* exit if an update has already been scheduled */
     if (drmmode_crtc->shadow_nonrotated_back->update_seq)
         return;
+
+    /* skip tearfree if dri2/present is flipping at the same time */
+    if (ms->drmmode.dri2_flipping || ms->drmmode.present_flipping) {
+        if (!drmmode_scanout_buffer_update_schedule(crtc,
+                drmmode_crtc->shadow_nonrotated))
+            drmmode_update_scanout_buffer(crtc,
+                drmmode_crtc->shadow_nonrotated);
+        return;
+    }
 
     /* copy the screen pixmap to our current backbuffer */
     drmmode_update_scanout_buffer(crtc,
