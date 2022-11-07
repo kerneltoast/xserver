@@ -512,7 +512,8 @@ ms_do_tearfree_flip(xf86CrtcPtr crtc)
     uint32_t seq;
 
     /* exit if the current crtc is off or not using tear-free */
-    if (!xf86_crtc_on(crtc) || !drmmode_crtc->shadow_nonrotated_back)
+    if (!xf86_crtc_on(crtc) || !crtc->scrn->vtSema ||
+        !drmmode_crtc->shadow_nonrotated_back)
         return;
 
     /* exit if an update has already been scheduled */
