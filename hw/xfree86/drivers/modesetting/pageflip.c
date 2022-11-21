@@ -529,9 +529,11 @@ ms_do_tearfree_flip(xf86CrtcPtr crtc)
         return;
     }
 
-    /* copy the screen pixmap to our current backbuffer */
-    drmmode_update_scanout_buffer(crtc,
-                                  drmmode_crtc->shadow_nonrotated_back);
+    /* copy the screen pixmap to our current backbuffer and only do a flip if
+     * the buffer actually changed */
+    if (!drmmode_update_scanout_buffer(crtc,
+                                       drmmode_crtc->shadow_nonrotated_back))
+        return;
 
     seq = ms_drm_queue_alloc(crtc, drmmode_crtc, ms_scanout_flip_handler,
                              ms_scanout_flip_abort);

@@ -304,7 +304,7 @@ Bool drmmode_SharedPixmapFlip(PixmapPtr frontTarget, xf86CrtcPtr crtc,
                               drmmode_ptr drmmode);
 void drmmode_DisableSharedPixmapFlipping(xf86CrtcPtr crtc, drmmode_ptr drmmode);
 
-void drmmode_update_scanout_buffer(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout);
+Bool drmmode_update_scanout_buffer(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout);
 Bool drmmode_scanout_buffer_update_schedule(xf86CrtcPtr crtc,
                                             drmmode_shadow_scanout_ptr scanout);
 

@@ -1394,7 +1394,7 @@ drmmode_DisableSharedPixmapFlipping(xf86CrtcPtr crtc, drmmode_ptr drmmode)
                                       &drmmode_crtc->prime_pixmap_back);
 }
 
-void
+Bool
 drmmode_update_scanout_buffer(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scanout)
 {
     modesettingPtr ms = modesettingPTR(crtc->scrn);
@@ -1407,7 +1407,7 @@ drmmode_update_scanout_buffer(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scano
 
     /* early exit if we have nothing to do */
     if (RegionNil(&scanout->screen_damage))
-        return;
+        return FALSE;
 
     n = RegionNumRects(&scanout->screen_damage);
     b = RegionRects(&scanout->screen_damage);
@@ -1446,6 +1446,7 @@ drmmode_update_scanout_buffer(xf86CrtcPtr crtc, drmmode_shadow_scanout_ptr scano
     #ifdef GLAMOR_HAS_GBM
     glamor_finish(pScreen);
     #endif
+    return TRUE;
 }
 
 struct scanout_buffer_update_args {
