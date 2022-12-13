@@ -35,8 +35,8 @@
  * Returns a negative value on error, 0 if there was nothing to process,
  * or 1 if we handled any events.
  */
-int
-ms_flush_drm_events(ScreenPtr screen)
+static int
+ms_flush_drm_events_timeout(ScreenPtr screen, int timeout)
 {
     ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
     modesettingPtr ms = modesettingPTR(scrn);
@@ -45,7 +45,7 @@ ms_flush_drm_events(ScreenPtr screen)
     int r;
 
     do {
-            r = xserver_poll(&p, 1, 0);
+            r = xserver_poll(&p, 1, timeout);
     } while (r == -1 && (errno == EINTR || errno == EAGAIN));
 
     /* If there was an error, r will be < 0.  Return that.  If there was
@@ -61,6 +61,12 @@ ms_flush_drm_events(ScreenPtr screen)
 
     /* Otherwise return 1 to indicate that we handled an event. */
     return 1;
+}
+
+int
+ms_flush_drm_events(ScreenPtr screen)
+{
+    return ms_flush_drm_events_timeout(screen, 0);
 }
 
 #ifdef GLAMOR_HAS_GBM
@@ -370,6 +376,24 @@ ms_do_pageflip(ScreenPtr screen,
             ms->drmmode.flip_bo_import_failed = FALSE;
     }
 
+    /* Wait for any pending TearFree flips to finish on all CRTCs first */
+    if (ms->drmmode.tearfree_enable) {
+        for (i = 0; i < config->num_crtc; i++) {
+            xf86CrtcPtr crtc = config->crtc[i];
+            drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+            drmmode_tearfree_ptr trf = &drmmode_crtc->tearfree;
+
+            if (!xf86_crtc_on(crtc))
+                continue;
+
+            while (trf->flip_seq) {
+                /* Sleep if necessary to wait for a new event */
+                if (ms_flush_drm_events_timeout(screen, -1) < 0)
+                    goto error_undo;
+            }
+        }
+    }
+
     /* Queue flips on all enabled CRTCs.
      *
      * Note that if/when we get per-CRTC buffers, we'll have to update this.
@@ -467,4 +491,45 @@ error_out:
 #endif /* GLAMOR_HAS_GBM */
 }
 
+static void
+ms_tearfree_flip_abort(void *data)
+{
+    drmmode_tearfree_ptr trf = data;
+
+    trf->flip_seq = 0;
+}
+
+static void
+ms_tearfree_flip_handler(uint64_t msc, uint64_t usec, void *data)
+{
+    drmmode_tearfree_ptr trf = data;
+
+    /* Swap the buffers and complete the flip */
+    trf->back_idx ^= 1;
+    trf->flip_seq = 0;
+}
+
+void
+ms_do_tearfree_flip(ScreenPtr screen, xf86CrtcPtr crtc)
+{
+    drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+    drmmode_tearfree_ptr trf = &drmmode_crtc->tearfree;
+    uint32_t idx = trf->back_idx, seq;
+
+    seq = ms_drm_queue_alloc(crtc, trf, ms_tearfree_flip_handler,
+                             ms_tearfree_flip_abort);
+    if (!seq)
+        return;
+
+    /* Copy the damage to the back buffer and then flip it at the vblank */
+    drmmode_copy_damage(crtc, trf->buf[idx].px, &trf->buf[idx].dmg);
+    if (do_queue_flip_on_crtc(screen, crtc, DRM_MODE_PAGE_FLIP_EVENT,
+                              seq, trf->buf[idx].fb_id, 0, 0)) {
+        xf86DrvMsg(crtc->scrn->scrnIndex, X_WARNING,
+                   "TearFree flip failed, rendering frame without TearFree\n");
+        drmmode_copy_damage(crtc, trf->buf[idx ^ 1].px, &trf->buf[idx ^ 1].dmg);
+    } else {
+        trf->flip_seq = seq;
+    }
+}
 #endif
